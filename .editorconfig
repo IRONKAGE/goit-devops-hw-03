@@ -1,0 +1,56 @@
+# top-most EditorConfig file
+root = true
+
+# ==========================================
+# 1. УНІВЕРСАЛЬНІ ПРАВИЛА (GLOBAL)
+# ==========================================
+[*]
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+charset = utf-8
+
+# ==========================================
+# 2. СКРИПТИ (BASH / POWERSHELL / CMD)
+# ==========================================
+[*.sh]
+indent_style = space
+indent_size = 2
+
+[*.{ps1,cmd,bat}]
+indent_style = space
+indent_size = 4
+
+# Для CMD/BAT залишаємо старий формат закінчення рядків (Strict Legacy)
+[*.{cmd,bat}]
+end_of_line = crlf
+
+# ==========================================
+# 3. КОД ТА КОНФІГУРАЦІЇ
+# ==========================================
+# Python (Стандарт PEP8)
+[*.py]
+indent_style = space
+indent_size = 4
+
+# Конфігурації (YAML, JSON)
+[*.{yml,yaml,json}]
+indent_style = space
+indent_size = 2
+
+# Інфраструктурні файли (Docker, Env)
+[{Dockerfile,*.env,.*ignore}]
+indent_style = space
+indent_size = 4
+
+# ==========================================
+# 4. КРИТИЧНІ ВИНЯТКИ (EXCEPTIONS)
+# ==========================================
+# Makefiles жорстко вимагають табів, інакше синтаксис ламається
+[Makefile]
+indent_style = tab
+indent_size = 4
+
+# Markdown використовує 2 пробіли в кінці для переносу рядка. Вимикаємо тримінг.
+[*.md]
+trim_trailing_whitespace = false

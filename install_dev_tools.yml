@@ -1,0 +1,248 @@
+---
+- name: Setup MLOps Development Environment (Docker, Docker Compose, Python, Django)
+  hosts: all
+  gather_facts: yes
+
+  # ==========================================
+  # 0. КОНСТАНТИ ТА ІНІЦІАЛІЗАЦІЯ
+  # ==========================================
+  vars:
+    django_version: "6.0.4"
+    python_min_major: 3
+    python_min_minor: 9
+    venv_path_linux: "/opt/ml_env"   # Шлях для Linux / macOS
+    venv_path_win: "C:\\ml_env"      # Шлях для Windows
+
+  tasks:
+    - name: Головний блок розгортання
+      block:
+        # ==========================================
+        # 1. ПІДГОТОВКА (PRE-FLIGHT & SMART CHECK)
+        # ==========================================
+        - name: "[Pre-flight] Перевірка підтримки операційної системи"
+          ansible.builtin.assert:
+            that:
+              - ansible_os_family in ['Debian', 'RedHat', 'Suse', 'Archlinux', 'Darwin', 'Windows']
+            fail_msg: "❌ КРИТИЧНО: ОС {{ ansible_os_family }} не підтримується."
+
+        - name: "[Pre-flight] Перевірка вільного місця на диску (Мінімум 5 GB для Linux/macOS)"
+          when: ansible_system in ['Linux', 'Darwin'] and item.mount == '/'
+          ansible.builtin.assert:
+            that:
+              - item.size_available > 5368709120
+            fail_msg: "❌ КРИТИЧНО: Мало місця на диску (потрібно 5 GB)."
+          loop: "{{ ansible_mounts | default([]) }}"
+          loop_control:
+            label: "{{ item.mount }}"
+
+        # ==========================================
+        # 2. ВСТАНОВЛЕННЯ СИСТЕМНИХ ЗАЛЕЖНОСТЕЙ
+        # ==========================================
+
+        # DEBIAN / UBUNTU / MINT / POP_OS! / ELEMENTARY OS / ZORIN OS / KDE NEON
+        - name: "[Debian] Install Docker"
+          when: ansible_os_family == "Debian"
+          become: yes
+          ansible.builtin.apt:
+            name: ['docker.io', 'docker-compose-v2']
+            state: present
+            update_cache: yes
+
+        # RHEL / CENTOS / ALMALINUX / ROCKY
+        - name: "[RedHat] Add Docker CE Repository"
+          when: ansible_os_family == "RedHat"
+          become: yes
+          ansible.builtin.get_url:
+            url: https://download.docker.com/linux/centos/docker-ce.repo
+            dest: /etc/yum.repos.d/docker-ce.repo
+
+        # RHEL / CENTOS / ALMALINUX / ROCKY
+        - name: "[RedHat] Install Docker CE"
+          when: ansible_os_family == "RedHat"
+          become: yes
+          ansible.builtin.package:
+            name: ['docker-ce', 'docker-ce-cli', 'containerd.io', 'docker-compose-plugin']
+            state: present
+
+        # ARCH / SUSE / openSUSE
+        - name: "[SUSE/Arch] Install Docker"
+          when: ansible_os_family in ["Suse", "Archlinux"]
+          become: yes
+          ansible.builtin.package:
+            name: ['docker', 'docker-compose']
+            state: present
+
+        # macOS (DARWIN)
+        - name: "[macOS] Install Docker Desktop"
+          when: ansible_os_family == "Darwin"
+          become: no
+          community.general.homebrew_cask:
+            name: docker
+            state: present
+
+        # WINDOWS (10/11)
+        - name: "[Windows] Install Docker Desktop"
+          when: ansible_os_family == "Windows"
+          chocolatey.chocolatey.win_chocolatey:
+            name: docker-desktop
+            state: present
+
+        # ЗАПУСК DOCKER (ДЛЯ ВСІХ LINUX)
+        - name: "[Linux] Ensure Docker service is running and enabled"
+          when: ansible_system == "Linux"
+          become: yes
+          ansible.builtin.systemd:
+            name: docker
+            state: started
+            enabled: yes
+
+        # POST-INSTALL DOCKER (ДОДАЄМО РОЗРОБНИКА ДО ГРУПИ DOCKER, ЩОБ НЕ ВИКОРИСТОВУВАТИ SUDO)
+        - name: "[Linux] Add developer to docker group (Post-install)"
+          when: ansible_system == "Linux"
+          become: yes
+          ansible.builtin.user:
+            name: "{{ ansible_env.SUDO_USER | default(ansible_user_id) }}"
+            groups: docker
+            append: yes
+
+        # ==========================================
+        # 3. ВСТАНОВЛЕННЯ PYTHON
+        # ==========================================
+
+        # DEBIAN / UBUNTU / MINT / POP_OS! / ELEMENTARY OS / ZORIN OS / KDE NEON
+        - name: "[Debian] Install Python"
+          when: ansible_os_family == "Debian"
+          become: yes
+          ansible.builtin.apt:
+            name:
+              - python3
+              - python3-pip
+              - python3-venv
+            state: present
+
+        # RHEL / CENTOS / FEDORA / SUSE / openSUSE (ENTERPRISE)
+        - name: "[RedHat/SUSE] Install Python"
+          when: ansible_os_family in ["RedHat", "Suse"]
+          become: yes
+          ansible.builtin.package:
+            name:
+              - python3
+              - python3-pip
+            state: present
+
+        # ARCH LINUX / MANJARO / ENDEAVOUROS
+        - name: "[Arch] Install Python"
+          when: ansible_os_family == "Archlinux"
+          become: yes
+          ansible.builtin.package:
+            name:
+              - python
+              - python-pip
+            state: present
+
+        # macOS (DARWIN)
+        - name: "[macOS] Install Python via Homebrew"
+          when: ansible_os_family == "Darwin"
+          become: no
+          community.general.homebrew:
+            name: python3
+            state: present
+            update_homebrew: yes
+
+        # WINDOWS (10/11)
+        - name: "[Windows] Install Python"
+          when: ansible_os_family == "Windows"
+          chocolatey.chocolatey.win_chocolatey:
+            name: python3
+            state: present
+
+        # ПЕРЕВІРКА МІНІМАЛЬНОЇ ВЕРСІЇ (ДЛЯ ВСІХ ОС)
+        - name: "[All] Verify Python minimum version"
+          ansible.builtin.command: >
+            {{ 'python' if ansible_os_family == 'Windows' else 'python3' }} -c
+            "import sys; sys.exit(0 if sys.version_info >= ({{ python_min_major }}, {{ python_min_minor }}) else 1)"
+          changed_when: false
+
+        # ==========================================
+        # 4. ІЗОЛЯЦІЯ (VIRTUAL ENVIRONMENT)
+        # ==========================================
+        - name: "[Linux] Create venv and install Django as Developer"
+          when: ansible_system == "Linux"
+          become: yes
+          become_user: "{{ ansible_env.SUDO_USER | default(ansible_user_id) }}"
+          ansible.builtin.pip:
+            name: "django=={{ django_version }}"
+            virtualenv: "{{ venv_path_linux }}"
+            virtualenv_command: "python3 -m venv"
+
+        # macOS: Робимо локально, щоб підчепити Homebrew Python (без sudo)
+        - name: "[macOS] Create venv and install Django natively"
+          when: ansible_os_family == "Darwin"
+          become: no
+          ansible.builtin.pip:
+            name: "django=={{ django_version }}"
+            virtualenv: "{{ venv_path_linux }}"
+            virtualenv_command: "python3 -m venv"
+
+        - name: "[Windows] Create venv and install Django"
+          when: ansible_os_family == "Windows"
+          ansible.windows.win_shell: |
+            if (-not (Test-Path "{{ venv_path_win }}")) { python -m venv "{{ venv_path_win }}" }
+            & "{{ venv_path_win }}\Scripts\pip.exe" install django=={{ django_version }}
+
+      # ОБРОБКА ПОМИЛОК (RESCUE BLOCK)
+      rescue:
+        - name: "[ALERT] Зупинка через критичну помилку"
+          ansible.builtin.fail:
+            msg: "❌ Сталася помилка під час розгортання середовища! Перевірте систему."
+
+    # ==========================================
+    # 5. ФІНАЛЬНИЙ ЗВІТ
+    # ==========================================
+    - name: "[Report] Get Docker version"
+      ansible.builtin.command: docker --version
+      register: docker_ver
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "[Report] Get Docker Compose version"
+      ansible.builtin.command: docker compose version
+      register: docker_compose_ver
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "[Report] Get Python version (POSIX)"
+      when: ansible_os_family != 'Windows'
+      ansible.builtin.command: "{{ venv_path_linux }}/bin/python --version"
+      register: python_ver_posix
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "[Report] Get Python version (Windows)"
+      when: ansible_os_family == 'Windows'
+      ansible.windows.win_command: "{{ venv_path_win }}\\Scripts\\python.exe --version"
+      register: python_ver_win
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "[Report] Get Django version (POSIX)"
+      when: ansible_os_family != 'Windows'
+      ansible.builtin.command: "{{ venv_path_linux }}/bin/python -m django --version"
+      register: django_ver_posix
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "[Report] Get Django version (Windows)"
+      when: ansible_os_family == 'Windows'
+      ansible.windows.win_command: "{{ venv_path_win }}\\Scripts\\python.exe -m django --version"
+      register: django_ver_win
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "🎯 СЕРЕДОВИЩЕ УСПІШНО НАЛАШТОВАНО! Ось ваш стек"
+      ansible.builtin.debug:
+        msg:
+          - "🐳 Docker: {{ docker_ver.stdout | default('Не вдалося') }}"
+          - "🐙 Docker Compose: {{ docker_compose_ver.stdout | default('Не вдалося визначити') }}"
+          - "🐍 Python (у venv): {{ python_ver_posix.stdout | default(python_ver_win.stdout | default('Помилка')) }}"
+          - "🌍 Django (у venv): {{ django_ver_posix.stdout | default(django_ver_win.stdout | default('Помилка')) }}"
