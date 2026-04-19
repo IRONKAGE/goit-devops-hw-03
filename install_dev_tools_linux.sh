@@ -65,7 +65,6 @@ print_succ "Апаратна архітектура: OK ($ARCH)"
 
 # 1.3 Аналіз дистрибутива та пакетного менеджера
 PKG_MANAGER=""
-APT_DC_PKG="docker-compose" # Fallback для старих систем (Ubuntu 20.04, Debian 11)
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     case "$ID" in
@@ -73,16 +72,7 @@ if [ -f /etc/os-release ]; then
             print_err "Виявлено Alpine Linux."
             printf "\033[1;33mℹ️ Alpine використовує OpenRC та musl. Запустіть спеціалізований install_dev_tools_alpine.sh\033[0m\n"
             exit 1 ;;
-        ubuntu|debian|linuxmint|pop)
-            PKG_MANAGER="apt-get"
-            MAJOR_VER=$(echo "$VERSION_ID" | cut -d. -f1)
-            if [ "$ID" = "ubuntu" ] || [ "$ID" = "pop" ]; then
-                if [ "$MAJOR_VER" -ge 22 ]; then APT_DC_PKG="docker-compose-v2"; fi
-            elif [ "$ID" = "linuxmint" ] && [ "$MAJOR_VER" -ge 21 ]; then
-                APT_DC_PKG="docker-compose-v2"
-            elif [ "$ID" = "debian" ] && [ "$MAJOR_VER" -ge 12 ]; then
-                APT_DC_PKG="docker-compose-v2"
-            fi ;;
+        ubuntu|debian|linuxmint|pop) PKG_MANAGER="apt-get" ;;
         fedora|centos|rhel|almalinux|rocky)
             if command -v dnf >/dev/null 2>&1; then PKG_MANAGER="dnf"; else PKG_MANAGER="yum"; fi ;;
         arch|manjaro|endeavouros) PKG_MANAGER="pacman" ;;
@@ -149,8 +139,30 @@ if command -v docker >/dev/null 2>&1; then
 else
     print_msg "Встановлення Docker Engine через $PKG_MANAGER..."
     case "$PKG_MANAGER" in
-        apt-get) $SUDO_CMD apt-get install -y docker.io $APT_DC_PKG ;;
-        dnf|yum) $SUDO_CMD $PKG_MANAGER install -y docker docker-compose ;;
+        apt-get)
+            DOCKER_ID="$ID"
+            DOCKER_CODENAME="$VERSION_CODENAME"
+            if [ "$ID" = "linuxmint" ] || [ "$ID" = "pop" ]; then
+                DOCKER_ID="ubuntu"
+                DOCKER_CODENAME="$UBUNTU_CODENAME"
+            fi
+
+            $SUDO_CMD apt-get install -y ca-certificates curl gnupg
+            $SUDO_CMD install -m 0755 -d /etc/apt/keyrings
+            if [ ! -f /etc/apt/keyrings/docker.asc ]; then
+                $SUDO_CMD curl -fsSL "https://download.docker.com/linux/$DOCKER_ID/gpg" -o /etc/apt/keyrings/docker.asc
+                $SUDO_CMD chmod a+r /etc/apt/keyrings/docker.asc
+            fi
+
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$DOCKER_ID $DOCKER_CODENAME stable" | $SUDO_CMD tee /etc/apt/sources.list.d/docker.list > /dev/null
+            $SUDO_CMD apt-get update -y -qq
+            $SUDO_CMD apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+            ;;
+        dnf|yum)
+            $SUDO_CMD $PKG_MANAGER install -y yum-utils
+            $SUDO_CMD yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+            $SUDO_CMD $PKG_MANAGER install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+            ;;
         pacman)  $SUDO_CMD pacman -S --noconfirm docker docker-compose ;;
         zypper)  $SUDO_CMD zypper install -y docker docker-compose ;;
     esac
